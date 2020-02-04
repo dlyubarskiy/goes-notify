@@ -72,10 +72,10 @@ def main(settings):
             logging.critical("Something went wrong when trying to obtain the appointment data.")
             continue
 
-        msg = 'Found new appointment(s) in location %s on %s (current is on %s)!' % (settings.get("enrollment_location_id"), dates[0], current_apt.strftime('%B %d, %Y @ %I:%M%p'))
-        notify_via_gmail(dates, current_apt, settings)
+        msg = 'Found new appointment(s) in location %s on %s (current is on %s)!' % (enrollment_location_id, dates[0], current_apt.strftime('%B %d, %Y @ %I:%M%p'))
+        notify_via_gmail(dates, current_apt, settings, enrollment_location_id)
 
-def notify_via_gmail(dates, current_apt, settings):
+def notify_via_gmail(dates, current_apt, settings, enrollment_location_id):
     sender = settings.get('gmail_account')
     recipient = settings.get('email_to', sender)  # If recipient isn't provided, send to self.
 
@@ -88,7 +88,7 @@ def notify_via_gmail(dates, current_apt, settings):
         server.starttls()
         server.login(sender, password)
 
-        subject = "Alert: Global Entry interview openings are available"
+        subject = 'Alert: Global Entry interview openings are available at location {}.'.format(enrollment_location_id)
 
         dateshtml = '<ul>'
         for d in dates:
