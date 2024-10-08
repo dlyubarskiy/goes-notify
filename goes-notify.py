@@ -1,9 +1,6 @@
 #!/usr/bin/env python
 
-# Note: for setting up email with sendmail, see: http://linuxconfig.org/configuring-gmail-as-sendmail-email-relay
-
 import argparse
-import commands
 import json
 import logging
 import smtplib
@@ -12,21 +9,13 @@ import os
 import glob
 import requests
 import hashlib
+import telegram
 
 from datetime import datetime
 from os import path
 from subprocess import check_output
 from distutils.spawn import find_executable
-from email.mime.text import MIMEText
-from email.mime.image import MIMEImage
-from email.mime.multipart import MIMEMultipart
 
-EMAIL_TEMPLATE = """
-<p>Good news! New Global Entry appointment(s) available on the following dates:</p>
-%s
-<p>Your current appointment is on %s</p>
-<p>If this sounds good, please sign in to https://ttp.cbp.dhs.gov/ to reschedule.</p>
-"""
 GOES_URL_FORMAT = 'https://ttp.cbp.dhs.gov/schedulerapi/slots?orderBy=soonest&limit=3&locationId={0}&minimum=1'
 
 def main(settings):
@@ -73,52 +62,12 @@ def main(settings):
             continue
 
         msg = 'Found new appointment(s) in location %s on %s (current is on %s)!' % (enrollment_location_id, dates[0], current_apt.strftime('%B %d, %Y @ %I:%M%p'))
-        notify_via_gmail(dates, current_apt, settings, enrollment_location_id)
-
-def notify_via_gmail(dates, current_apt, settings, enrollment_location_id):
-    sender = settings.get('gmail_account')
-    recipient = settings.get('email_to', sender)  # If recipient isn't provided, send to self.
-
-    try:
-        password = settings.get('gmail_password')
-        if not password:
-            logging.warning('Trying to send from gmail, but password was not provided.')
-            return
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(sender, password)
-
-        subject = 'Alert: Global Entry interview openings are available at location {}.'.format(enrollment_location_id)
-
-        dateshtml = '<ul>'
-        for d in dates:
-            dateshtml += "<li>" + d + "</li>"
-
-        dateshtml += "</ul>"
-
-        message = EMAIL_TEMPLATE % (dateshtml, current_apt.strftime('%B %d, %Y'))
-
-        msg = MIMEMultipart()
-        msg['Subject'] = subject
-        msg['From'] = sender
-        msg['To'] = ','.join(recipient)
-        msg['mime-version'] = "1.0"
-        msg['content-type'] = "text/html"
-        msg.attach(MIMEText(message, 'html'))
-
-        server.sendmail(sender, recipient, msg.as_string())
-        server.quit()
-    except Exception:
-        logging.exception('Failed to send succcess e-mail.')
-        log(e)
+#        notify_via_gmail(dates, current_apt, settings, enrollment_location_id)
 
 def _check_settings(config):
     required_settings = (
         'current_interview_date_str',
-        'enrollment_location_id_list',
-        'gmail_account',
-        'gmail_password',
-        'email_to'
+        'enrollment_location_id_list'
     )
 
     for setting in required_settings:

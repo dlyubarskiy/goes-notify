@@ -1,7 +1,5 @@
-FROM python:2.7.16
-RUN apt-get update
-RUN apt-get install -y cron 
-RUN apt-get install -y python-requests
+FROM python:3.11.10
+RUN pip install requests python-telegram-bot
 WORKDIR /app
 COPY . .
 RUN chmod +x *
