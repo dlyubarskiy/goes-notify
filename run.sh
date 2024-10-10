@@ -1,3 +1,3 @@
 #!/bin/bash
 
-python /app/goes-notify.py --config=/app/config.json
+/usr/local/bin/python /app/goes-notify.py

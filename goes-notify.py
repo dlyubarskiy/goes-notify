@@ -1,30 +1,25 @@
 #!/usr/bin/env python
 
-import argparse
-import json
 import logging
-import smtplib
 import sys
 import os
 import glob
 import requests
 import hashlib
 import telegram
+import asyncio
+import json
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from os import path
 from subprocess import check_output
 from distutils.spawn import find_executable
 
 GOES_URL_FORMAT = 'https://ttp.cbp.dhs.gov/schedulerapi/slots?orderBy=soonest&limit=3&locationId={0}&minimum=1'
 
-def main(settings):
-
-    if not settings['enrollment_location_id_list']:
-        logging.info('Location ID list is empty.')
-        return
+def main(current_apt, enrollment_location_id_list, telegram_api_token, telegram_channel_id):
     
-    for enrollment_location_id in settings['enrollment_location_id_list']:
+    for enrollment_location_id in enrollment_location_id_list:
         try:
             logging.info('Checking appointment availability in location: %s' % enrollment_location_id)
             # obtain the json from the web url
@@ -35,7 +30,6 @@ def main(settings):
                 logging.info('No appointments available.')
                 continue
 
-            current_apt = datetime.strptime(settings['current_interview_date_str'], '%B %d, %Y')
             dates = []
             for o in data:
                 if o['active']:
@@ -49,7 +43,7 @@ def main(settings):
 
             hash = hashlib.md5(''.join(dates) + current_apt.strftime('%B %d, %Y @ %I:%M%p')).hexdigest()
             fn = "goes-notify_{0}_{1}.txt".format(enrollment_location_id,hash)
-            if settings.get('no_spamming') and os.path.exists(fn):
+            if os.path.exists(fn):
                 continue
             else:
                 for f in glob.glob("goes-notify_{0}_*.txt".format(enrollment_location_id)):
@@ -61,24 +55,40 @@ def main(settings):
             logging.critical("Something went wrong when trying to obtain the appointment data.")
             continue
 
-        msg = 'Found new appointment(s) in location %s on %s (current is on %s)!' % (enrollment_location_id, dates[0], current_apt.strftime('%B %d, %Y @ %I:%M%p'))
-#        notify_via_gmail(dates, current_apt, settings, enrollment_location_id)
-
-def _check_settings(config):
-    required_settings = (
-        'current_interview_date_str',
-        'enrollment_location_id_list'
-    )
-
-    for setting in required_settings:
-        if not config.get(setting):
-            raise ValueError('Missing setting %s in config.json file.' % setting)
+        msg = 'Found new appointment(s) at %s (location ID: %s) on %s (current is on %s)!' % (get_enrollment_center_name(enrollment_location_id), enrollment_location_id, dates[0], current_apt.strftime('%B %d, %Y @ %I:%M%p'))
+        send_telegram_notification(telegram_api_token, telegram_channel_id, msg)
     
-    if not isinstance(config.get('enrollment_location_id_list'), list):
-        raise ValueError('enrollment_location_id_list has to be a list')
+def send_telegram_notification(telegram_api_token, telegram_channel_id, msg):
+    bot = telegram.Bot(token=telegram_api_token)
 
-    if not isinstance(config.get('email_to'), list):
-        raise ValueError('email_to has to be a list')
+    # need to pre-pend '-100' before the Telegram channel ID for the messages to go through
+    updated_telegram_channel_id = '-100' + telegram_channel_id
+    try:
+        asyncio.run(bot.send_message(chat_id=updated_telegram_channel_id, text=msg))
+
+    except Exception as e:
+        logging.error("Something went wrong when trying to send the message to Telegram channel, the error is: ",e)
+        sys.exit()
+
+def get_enrollment_center_name(enrollment_location_id):
+
+    enrollment_center_name = ''
+    pwd = path.dirname(sys.argv[0])
+    enrollment_centers_json = os.path.join(pwd, 'enrollment_centers.json')    
+
+    try:
+        with open(enrollment_centers_json) as f:
+            enrollment_centers = json.load(f)
+            for enrollment_center in enrollment_centers:
+                if enrollment_center['ID'] == enrollment_location_id:
+                    enrollment_center_name = enrollment_center['Name']
+                    break
+    
+    except Exception as e:
+        logging.error("Something went wrong when trying to find enrollment center name, the error is: ",e)
+    
+    return enrollment_center_name
+
 
 if __name__ == '__main__':
 
@@ -92,34 +102,47 @@ if __name__ == '__main__':
 
     pwd = path.dirname(sys.argv[0])
 
-    # Parse Arguments
-    parser = argparse.ArgumentParser(description="Command line script to check for goes openings.")
-    parser.add_argument('--config', dest='configfile', default='%s/config.json' % pwd, help='Config file to use (default is config.json)')
-    arguments = vars(parser.parse_args())
-    logging.info("config file is:" + arguments['configfile'])
-    # Load Settings
-    try:
-        with open(arguments['configfile']) as json_file:
-            settings = json.load(json_file)
+    # Read in environment variables
+    CURR_IVIEW_DATE = os.environ.get("CURR_IVIEW_DATE")
+    LOCATION_IDS    = os.environ.get("LOCATION_IDS")
+    TG_API_TOKEN    = os.environ.get("TG_API_TOKEN")
+    TG_CHANNEL_ID   = os.environ.get("TG_CHANNEL_ID")
+    LOG_FILE        = os.environ.get("LOG_FILE")
 
-            # merge args into settings IF they're True
-            for key, val in arguments.iteritems():
-                if not arguments.get(key): continue
-                settings[key] = val
+    if CURR_IVIEW_DATE is None or CURR_IVIEW_DATE == "":
+        current_apt = datetime.now() + timedelta(days=6*30)
+        logging.info('Current appointment not set, assuming time window is six months from today.')
+    else:
+        current_apt = datetime.strptime(CURR_IVIEW_DATE, '%B %d, %Y')
 
-            settings['configfile'] = arguments['configfile']
-            _check_settings(settings)
-    except Exception as e:
-        logging.error('Error loading settings from config.json file: %s' % e)
+    if LOCATION_IDS is None or LOCATION_IDS == "":
+        logging.error('Location IDs are required to search for available appointments. Please set LOCATION_IDS environment variable')
         sys.exit()
+    else:
+        enrollment_location_id_list = LOCATION_IDS.split(",")
+
+    if TG_API_TOKEN is None or TG_API_TOKEN == "":
+        logging.error('Telegram API token is required to send notifications. Please set TG_API_TOKEN environment variable')
+        sys.exit()
+    else:
+        telegram_api_token = TG_API_TOKEN
+
+    if TG_CHANNEL_ID is None or TG_CHANNEL_ID == "":
+        logging.error('Telegram channel ID is required to send notifications. Please set TG_CHANNEL_ID environment variable')
+        sys.exit()
+    else:
+        telegram_channel_id = TG_CHANNEL_ID
+
+    if LOG_FILE is None or LOG_FILE == "":
+        logfile = ""
+    else:
+        logfile = LOG_FILE
 
     # Configure File Logging
-    if settings.get('logfile'):
-        handler = logging.FileHandler('%s/%s' % (pwd, settings.get('logfile')))
+    if logfile:
+        handler = logging.FileHandler('%s/%s' % (pwd, logfile))
         handler.setFormatter(logging.Formatter('%(levelname)s: %(asctime)s %(message)s'))
         handler.setLevel(logging.DEBUG)
         logging.getLogger('').addHandler(handler)
 
-    logging.debug('Running script with arguments: %s' % arguments)
-
-    main(settings)
+    main(current_apt, enrollment_location_id_list, telegram_api_token, telegram_channel_id)
